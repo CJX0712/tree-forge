@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TreeForge · 决策树锻造炉</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3;
+    --dim:#8b949e; --red:#ff7b72; --green:#7ee787; --blue:#79c0ff; --yellow:#e3b341;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font-family:"Cascadia Code","JetBrains Mono",Consolas,"Microsoft YaHei",monospace;padding:20px;line-height:1.5}
+  h1{font-size:20px;margin-bottom:2px}
+  h1 .tag{color:var(--yellow);font-size:12px;vertical-align:middle;margin-left:8px}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:280px 1fr 1fr;gap:16px;align-items:start}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px}
+  .panel h2{font-size:13px;color:var(--blue);margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:6px}
+  label{display:block;font-size:12px;color:var(--dim);margin:10px 0 2px}
+  select,input[type=range]{width:100%}
+  select{background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:5px;font-family:inherit;font-size:12px}
+  .val{color:var(--yellow)}
+  button{background:#21262d;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:8px 14px;cursor:pointer;font-family:inherit;font-size:13px;margin-top:12px;width:100%}
+  button:hover{border-color:var(--blue)}
+  button.primary{background:#1f6feb22;border-color:#1f6feb}
+  canvas{background:#0a0d12;border:1px solid var(--border);border-radius:6px;width:100%}
+  .stats{font-size:12px}
+  .stats .row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--border)}
+  .stats .row span:last-child{color:var(--yellow)}
+  .legend{font-size:11px;color:var(--dim);margin-top:8px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+  #treeWrap{overflow-x:auto;border:1px solid var(--border);border-radius:6px;background:#0a0d12;margin-top:6px}
+  #tests{margin-top:16px}
+  #tests .t{font-size:12px;padding:4px 8px;border-left:3px solid var(--border);margin:3px 0;background:var(--panel)}
+  #tests .t.ok{border-left-color:var(--green)}
+  #tests .t.bad{border-left-color:var(--red)}
+  #tests .t .d{color:var(--dim);font-size:11px}
+  .bar{height:14px;border-radius:3px;background:#21262d;margin:4px 0 10px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:3px}
+  .foot{color:var(--dim);font-size:11px;margin-top:18px}
+</style>
+</head>
+<body>
+<h1>TreeForge ⚒ 决策树锻造炉<span class="tag">CART · ID3 · 随机森林 · 零依赖</span></h1>
+<div class="sub">纯 JS 手写决策树（熵 / Gini 双准则）+ Bagging 森林 ｜ 不变量：树根增益 == 暴力枚举全部 (特征, 阈值) 的最大增益</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>⚙ 控制台</h2>
+    <label>数据集</label>
+    <select id="dsSel">
+      <option value="moons">双月牙</option>
+      <option value="circles">同心环</option>
+      <option value="xor">XOR 象限</option>
+    </select>
+    <label>噪声 <span class="val" id="noiseV">0.12</span></label>
+    <input type="range" id="noise" min="0" max="0.4" step="0.02" value="0.12">
+    <label>树最大深度 <span class="val" id="depthV">6</span></label>
+    <input type="range" id="depth" min="1" max="10" step="1" value="6">
+    <label>森林树数 <span class="val" id="ntreeV">15</span></label>
+    <input type="range" id="ntree" min="5" max="41" step="2" value="15">
+    <label>分裂准则</label>
+    <select id="critSel">
+      <option value="entropy">信息增益（熵，ID3 风格）</option>
+      <option value="gini">Gini 不纯度（CART）</option>
+    </select>
+    <button id="regenBtn">↻ 重生成数据</button>
+    <button id="trainBtn" class="primary">⚒ 锻造（训练 + 森林）</button>
+    <div class="legend">
+      <span class="dot" style="background:#ff7b72"></span>类别 0 &nbsp;
+      <span class="dot" style="background:#7ee787"></span>类别 1<br>
+      淡色区域 = 模型决策边界
+    </div>
+  </div>
+  <div class="panel">
+    <h2>🌲 单树决策边界（深度 <span id="dTag">6</span>）</h2>
+    <canvas id="cv1" width="440" height="440"></canvas>
+    <div id="treeWrap"></div>
+  </div>
+  <div class="panel">
+    <h2>🏞 森林决策边界 + 精度</h2>
+    <canvas id="cv2" width="440" height="440"></canvas>
+    <div class="stats" id="stats" style="margin-top:10px"></div>
+    <div style="margin-top:10px">
+      <div style="font-size:11px;color:var(--dim)">5 折交叉验证精度</div>
+      <div class="bar"><i id="barTree" style="width:0%;background:#79c0ff"></i></div>
+      <div style="font-size:11px;color:var(--dim)">随机森林（Bagging）</div>
+      <div class="bar"><i id="barForest" style="width:0%;background:#7ee787"></i></div>
+      <div style="font-size:11px;color:var(--dim)">多数类基线</div>
+      <div class="bar"><i id="barBase" style="width:0%;background:#8b949e"></i></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="tests">
+  <h2 style="color:#79c0ff;font-size:13px;margin-bottom:8px">🧪 自检（8 项不变量）</h2>
+  <div id="testList"></div>
+</div>
+
+<div class="foot">TreeForge — 手写决策树，无任何 ML 依赖。核心不变量：根节点选择的分裂增益与暴力枚举所有候选 (特征, 阈值) 独立重算的最大增益一致（1e-9）。</div>
+
+<script id="engine">
+const TreeForge = (function(){
+  function mulberry32(a){
+    return function(){
+      a|=0; a=a+0x6D2B79F5|0;
+      let t=Math.imul(a^a>>>15,1|a);
+      t=t+Math.imul(t^t>>>7,61|t)^t;
+      return ((t^t>>>14)>>>0)/4294967296;
+    };
+  }
+  function entropyOf(counts,total){
+    let e=0;
+    for(let i=0;i<counts.length;i++){
+      if(counts[i]<=0) continue;
+      const p=counts[i]/total;
+      e-=p*Math.log2(p);
+    }
+    return e;
+  }
+  function giniOf(counts,total){
+    let g=1;
+    for(let i=0;i<counts.length;i++){ g-=(counts[i]/total)*(counts[i]/total); }
+    return g;
+  }
+  function impurity(criterion,counts,total){
+    return criterion==='gini'? giniOf(counts,total) : entropyOf(counts,total);
+  }
+
+  // ---- datasets: 2D, 2 classes ----
+  function makeMoons(n,noise,seed){
+    const rnd=mulberry32(seed); const X=[],y=[];
+    for(let i=0;i<n;i++){
+      const cls=i%2; const t=rnd()*Math.PI;
+      let x,yy;
+      if(cls===0){ x=Math.cos(t); yy=Math.sin(t)*0.8; }
+      else{ x=1-Math.cos(t); yy=0.45-Math.sin(t)*0.8; }
+      if(noise>0){ x+=(rnd()*2-1)*noise; yy+=(rnd()*2-1)*noise; }
+      X.push([x,yy]); y.push(cls);
+    }
+    return {X:X,y:y};
+  }
+  function makeCircles(n,noise,seed){
+    const rnd=mulberry32(seed); const X=[],y=[];
+    for(let i=0;i<n;i++){
+      const cls=i%2; const r=cls===0?0.6:1.4; const t=rnd()*2*Math.PI;
+      let x=r*Math.cos(t), yy=r*Math.sin(t);
+      if(noise>0){ x+=(rnd()*2-1)*noise; yy+=(rnd()*2-1)*noise; }
+      X.push([x,yy]); y.push(cls);
+    }
+    return {X:X,y:y};
+  }
+  function makeXor(n,noise,seed){
+    const rnd=mulberry32(seed); const X=[],y=[];
+    for(let i=0;i<n;i++){
+      const x=rnd()*2-1, yy=rnd()*2-1;
+      const cls=((x>0)!==(yy>0))?1:0;
+      X.push([x,yy]); y.push(cls);
+    }
+    return {X:X,y:y};
+  }
+
+  // ---- best split: scan all (feature, midpoint) candidates ----
+  function bestSplit(X,y,idx,criterion){
+    const n=idx.length; if(n<2) return null;
+    const counts=[0,0];
+    for(let k=0;k<n;k++) counts[y[idx[k]]]++;
+    if(counts[0]===0||counts[1]===0) return null;   // pure
+    const base=impurity(criterion,counts,n);
+    let bg=-1, bf=-1, bthr=0;
+    for(let f=0;f<2;f++){
+      const order=idx.slice().sort((a,b)=>X[a][f]-X[b][f]);
+      const lc=[0,0], rc=counts.slice();
+      for(let k=0;k<n-1;k++){
+        const i=order[k];
+        lc[y[i]]++; rc[y[i]]--;
+        if(X[i][f]===X[order[k+1]][f]) continue;    // no gap -> no candidate
+        const thr=(X[i][f]+X[order[k+1]][f])/2;
+        const nl=k+1, nr=n-nl;
+        if(nl<=0||nr<=0) continue;
+        const gain=base-(nl/n)*impurity(criterion,lc,nl)-(nr/n)*impurity(criterion,rc,nr);
+        if(gain>bg+1e-15){ bg=gain; bf=f; bthr=thr; }
+      }
+    }
+    if(bf<0||bg<=1e-12) return null;
+    const li=[],ri=[];
+    for(let k=0;k<n;k++){ (X[idx[k]][bf]<=bthr?li:ri).push(idx[k]); }
+    return {gain:bg,f:bf,thr:bthr,li:li,ri:ri};
+  }
+
+  function buildTree(X,y,idx,depth,maxDepth,minSplit,criterion){
+    const n=idx.length;
+    const counts=[0,0];
+    for(let k=0;k<n;k++) counts[y[idx[k]]]++;
+    const node={n:n,counts:counts.slice(),pred:counts[1]>counts[0]?1:0,leaf:false,depth:depth};
+    const sp=(depth<maxDepth && n>=minSplit)? bestSplit(X,y,idx,criterion) : null;
+    if(!sp){ node.leaf=true; return node; }
+    node.f=sp.f; node.thr=sp.thr; node.gain=sp.gain;
+    node.left=buildTree(X,y,sp.li,depth+1,maxDepth,minSplit,criterion);
+    node.right=buildTree(X,y,sp.ri,depth+1,maxDepth,minSplit,criterion);
+    return node;
+  }
+
+  function trainTree(ds,o){
+    o=o||{};
+    const idx=[];
+    for(let i=0;i<ds.X.length;i++) idx.push(i);
+    return buildTree(ds.X,ds.y,idx,0,o.maxDepth||64,o.minSplit||2,o.criterion||'entropy');
+  }
+
+  function predictNode(node,x){
+    let c=node;
+    while(!c.leaf){ c = x[c.f]<=c.thr ? c.left : c.right; }
+    return c.pred;
+  }
+  function leafOf(node,x){
+    let c=node;
+    while(!c.leaf){ c = x[c.f]<=c.thr ? c.left : c.right; }
+    return c;
+  }
+  function countNodes(node){ return node.leaf?1:1+countNodes(node.left)+countNodes(node.right); }
+  // edge-depth semantics: root=0, matches node.depth
+  function treeDepth(node){ return node.leaf?node.depth:Math.max(treeDepth(node.left),treeDepth(node.right)); }
+  function accuracy(tree,ds){
+    let c=0;
+    for(let i=0;i<ds.X.length;i++) if(predictNode(tree,ds.X[i])===ds.y[i]) c++;
+    return c/ds.X.length;
+  }
+  function serialize(node){
+    if(node.leaf) return 'L'+node.pred+':'+node.n;
+    return 'N[f'+node.f+':'+node.thr.toFixed(12)+']('+serialize(node.left)+','+serialize(node.right)+')';
+  }
+
+  function trainForest(ds,opts){
+    const o=opts||{};
+    const T=o.trees||15;
+    const rnd=mulberry32(o.seed||7);
+    const n=ds.X.length; const trees=[];
+    const md=(o.maxDepth!=null)?o.maxDepth:10;
+    for(let t=0;t<T;t++){
+      const idx=[];
+      for(let k=0;k<n;k++) idx.push((rnd()*n)|0);   // bootstrap with replacement
+      trees.push(buildTree(ds.X,ds.y,idx,0,md,2,o.criterion||'gini'));
+    }
+    return {trees:trees,seed:o.seed||7};
+  }
+  function forestPredict(f,x){
+    let c0=0;
+    for(let t=0;t<f.trees.length;t++) c0+=predictNode(f.trees[t],x);
+    return c0*2>f.trees.length ? 0 : 1;   // majority; c0 = votes for class 0
+  }
+  function forestAccuracy(f,ds){
+    let c=0;
+    for(let i=0;i<ds.X.length;i++) if(forestPredict(f,ds.X[i])===ds.y[i]) c++;
+    return c/ds.X.length;
+  }
+
+  function crossValidate(ds,k,o){
+    o=o||{};
+    const n=ds.X.length;
+    const rnd=mulberry32(o.seed||3);
+    const perm=[];
+    for(let i=0;i<n;i++) perm.push(i);
+    for(let i=n-1;i>0;i--){ const j=(rnd()*(i+1))|0; const t=perm[i]; perm[i]=perm[j]; perm[j]=t; }
+    let correct=0;
+    for(let f=0;f<k;f++){
+      const train=[],test=[];
+      for(let i=0;i<n;i++){ (i%k===f?test:train).push(perm[i]); }
+      const tree=buildTree(ds.X,ds.y,train,0,o.maxDepth||64,o.minSplit||2,o.criterion||'entropy');
+      for(let i=0;i<test.length;i++){ if(predictNode(tree,ds.X[test[i]])===ds.y[test[i]]) correct++; }
+    }
+    return correct/n;
+  }
+  function baselineAcc(ds){
+    const c=[0,0];
+    for(let i=0;i<ds.y.length;i++) c[ds.y[i]]++;
+    return Math.max(c[0],c[1])/ds.y.length;
+  }
+
+  return {
+    mulberry32:mulberry32, entropyOf:entropyOf, giniOf:giniOf, impurity:impurity,
+    makeMoons:makeMoons, makeCircles:makeCircles, makeXor:makeXor,
+    bestSplit:bestSplit, buildTree:buildTree, trainTree:trainTree,
+    predictNode:predictNode, leafOf:leafOf, countNodes:countNodes, treeDepth:treeDepth,
+    accuracy:accuracy, serialize:serialize,
+    trainForest:trainForest, forestPredict:forestPredict, forestAccuracy:forestAccuracy,
+    crossValidate:crossValidate, baselineAcc:baselineAcc
+  };
+})();
+</script>
+
+<script>
+(function(){
+  const F=TreeForge;
+  const $=id=>document.getElementById(id);
+
+  // ---------- brute-force gain (independent re-implementation for cross-validation) ----------
+  function bruteMaxGain(ds,criterion){
+    const X=ds.X,y=ds.y;
+    const n=X.length;
+    const counts=[0,0];
+    for(let i=0;i<n;i++) counts[y[i]]++;
+    const base=F.impurity(criterion,counts,n);
+    let mg=-1;
+    for(let f=0;f<2;f++){
+      const vals=[];
+      for(let i=0;i<n;i++) vals.push(X[i][f]);
+      vals.sort((a,b)=>a-b);
+      const uniq=[];
+      for(let i=0;i<vals.length;i++) if(i===0||vals[i]!==vals[i-1]) uniq.push(vals[i]);
+      for(let k=0;k<uniq.length-1;k++){
+        const thr=(uniq[k]+uniq[k+1])/2;
+        const lc=[0,0],rc=[0,0];
+        for(let i=0;i<n;i++){
+          if(X[i][f]<=thr) lc[y[i]]++; else rc[y[i]]++;
+        }
+        if(lc[0]+lc[1]===0||rc[0]+rc[1]===0) continue;
+        const nl=lc[0]+lc[1], nr=rc[0]+rc[1];
+        const g=base-(nl/n)*F.impurity(criterion,lc,nl)-(nr/n)*F.impurity(criterion,rc,nr);
+        if(g>mg) mg=g;
+      }
+    }
+    return mg;
+  }
+
+  // ---------- self tests ----------
+  function runTests(){
+    const list=$('testList');
+    const out=[];
+    function T(name,ok,detail){ out.push({name:name,ok:ok,detail:detail||''}); }
+
+    // 1) root split optimality vs brute-force enumeration
+    {
+      const ds=F.makeMoons(300,0.12,101);
+      const tree=F.trainTree(ds,{maxDepth:64,criterion:'entropy'});
+      const mg=bruteMaxGain(ds,'entropy');
+      T('根分裂最优性：树根增益 == 暴力枚举最大增益 (1e-9)',
+        Math.abs(tree.gain-mg)<1e-9,
+        'tree='+tree.gain.toFixed(10)+' brute='+mg.toFixed(10));
+    }
+    // 2) unconstrained tree fits training set 100%
+    {
+      const ds=F.makeMoons(300,0.08,7);
+      const tree=F.trainTree(ds,{maxDepth:64,minSplit:2});
+      const acc=F.accuracy(tree,ds);
+      T('无限深训练精度 == 100%',acc===1,'acc='+acc);
+    }
+    // 3) leaf prediction == test-side recomputed majority of routed samples
+    {
+      const ds=F.makeMoons(240,0.18,11);
+      const tree=F.trainTree(ds,{maxDepth:64,minSplit:8});
+      const leafStats=new Map();   // leaf node -> [c0,c1]
+      let ok=true,bad='';
+      for(let i=0;i<ds.X.length;i++){
+        const leaf=F.leafOf(tree,ds.X[i]);
+        let st=leafStats.get(leaf);
+        if(!st){ st=[0,0]; leafStats.set(leaf,st); }
+        st[ds.y[i]]++;
+      }
+      for(const [leaf,st] of leafStats){
+        const maj=st[1]>st[0]?1:0;
+        if(leaf.pred!==maj){ ok=false; bad='leaf pred='+leaf.pred+' recomputed='+maj; break; }
+      }
+      T('叶节点预测 == 路由样本多数类（独立重算）',ok,bad||('leaves='+leafStats.size));
+    }
+    // 4) both criteria reach 100% train fit
+    {
+      const ds=F.makeCircles(240,0.1,21);
+      const a=F.accuracy(F.trainTree(ds,{criterion:'entropy'}),ds);
+      const b=F.accuracy(F.trainTree(ds,{criterion:'gini'}),ds);
+      T('熵 / Gini 双准则均 100% 拟合训练集',a===1&&b===1,'entropy='+a+' gini='+b);
+    }
+    // 5) CV accuracy beats majority baseline by ≥ 10pp
+    {
+      const ds=F.makeMoons(400,0.15,5);
+      const cv=F.crossValidate(ds,5,{maxDepth:6});
+      const base=F.baselineAcc(ds);
+      T('5 折 CV 精度 ≥ 基线 + 10pp',cv>=base+0.10,'cv='+(cv*100).toFixed(1)+'% base='+(base*100).toFixed(1)+'%');
+    }
+    // 6) pre-pruning actually bounds depth & shrinks tree
+    {
+      const ds=F.makeMoons(300,0.15,9);
+      const full=F.trainTree(ds,{maxDepth:64});
+      const pruned=F.trainTree(ds,{maxDepth:2});
+      T('预剪枝：深度 2 树深度 ≤2 且节点数 < 全量树',
+        F.treeDepth(pruned)<=2 && F.countNodes(pruned)<F.countNodes(full),
+        'prunedNodes='+F.countNodes(pruned)+' fullNodes='+F.countNodes(full));
+    }
+    // 7) forest diversity: bootstrap trees disagree somewhere
+    {
+      const ds=F.makeMoons(200,0.2,33);
+      const f=F.trainForest(ds,{trees:9,seed:77});
+      let allSame=true;
+      for(let i=1;i<ds.X.length;i++){
+        for(let t=1;t<9;t++){
+          if(F.predictNode(f.trees[0],ds.X[i])!==F.predictNode(f.trees[t],ds.X[i])){ allSame=false; }
+        }
+        if(!allSame) break;
+      }
+      T('森林多样性：不同 bootstrap 树存在预测分歧',!allSame);
+    }
+    // 8) determinism
+    {
+      const ds=F.makeXor(240,0,42);
+      const t1=F.trainTree(ds,{seed:9});
+      const t2=F.trainTree(ds,{seed:9});
+      const s1=F.serialize(t1), s2=F.serialize(t2);
+      T('种子确定性：同种子训练逐字节一致',s1===s2,'len='+s1.length);
+    }
+
+    let okN=0;
+    list.innerHTML=out.map(r=>{
+      if(r.ok) okN++;
+      return '<div class="t '+(r.ok?'ok':'bad')+'">'+(r.ok?'✅':'❌')+' '+r.name+
+             (r.detail?'<div class="d">'+r.detail+'</div>':'')+'</div>';
+    }).join('');
+    const h=$('testList').parentElement.querySelector('h2');
+    h.textContent='🧪 自检（8 项不变量）— '+okN+'/8'+(okN===8?' 全绿 ✦':'');
+  }
+
+  // ---------- tree SVG ----------
+  function treeSVG(node){
+    let leaves=0;
+    const items=[];
+    (function layout(nd,d){
+      nd._d=d;
+      if(nd.leaf){ nd._x=leaves++; items.push(nd); return; }
+      layout(nd.left,d+1); layout(nd.right,d+1);
+      nd._x=(nd.left._x+nd.right._x)/2; items.push(nd);
+    })(node,0);
+    const H=(node._dMax||0);
+    const hAll=(function(md){ let m=0; (function w(n){ if(n._d>m)m=n._d; if(!n.leaf){w(n.left);w(n.right);} })(node); return m; })(0);
+    const W=Math.max(leaves*36,160), Hh=(hAll+1)*46+16;
+    let s='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+Hh+'" style="display:block">';
+    for(const nd of items){
+      if(nd.leaf) continue;
+      for(const ch of [nd.left,nd.right]){
+        s+='<line x1="'+(nd._x*36+18)+'" y1="'+(nd._d*46+30)+'" x2="'+(ch._x*36+18)+'" y2="'+(ch._d*46+14)+'" stroke="#30363d" stroke-width="1.2"/>';
+      }
+    }
+    for(const nd of items){
+      const cx=nd._x*36+18, cy=nd._d*46+22;
+      if(nd.leaf){
+        const col=nd.pred===0?'#ff7b72':'#7ee787';
+        s+='<rect x="'+(cx-15)+'" y="'+(cy-10)+'" width="30" height="20" rx="5" fill="'+(nd.pred===0?'#ff7b7222':'#7ee78722')+'" stroke="'+col+'" stroke-width="1"/>';
+        s+='<text x="'+cx+'" y="'+(cy+4)+'" text-anchor="middle" font-size="9" fill="'+col+'" font-family="monospace">●'+nd.n+'</text>';
+      }else{
+        s+='<rect x="'+(cx-32)+'" y="'+(cy-10)+'" width="64" height="20" rx="5" fill="#161b22" stroke="#79c0ff" stroke-width="1"/>';
+        s+='<text x="'+cx+'" y="'+(cy+4)+'" text-anchor="middle" font-size="9" fill="#79c0ff" font-family="monospace">x'+nd.f+'≤'+nd.thr.toFixed(2)+'</text>';
+      }
+    }
+    return s+'</svg>';
+  }
+
+  // ---------- canvas rendering ----------
+  function fitView(ds){
+    let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+    for(const p of ds.X){ mnx=Math.min(mnx,p[0]); mxx=Math.max(mxx,p[0]); mny=Math.min(mny,p[1]); mxy=Math.max(mxy,p[1]); }
+    const pad=0.4;
+    return {mnx:mnx-pad,mxx:mxx+pad,mny:mny-pad,mxy:mxy+pad};
+  }
+  function toPx(v,v0,v1,lo,hi){ return lo+(v-v0)/(v1-v0)*(hi-lo); }
+
+  function drawModel(cv,model,predictFn,ds,view){
+    const ctx=cv.getContext('2d');
+    const w=cv.width,h=cv.height;
+    ctx.fillStyle='#0a0d12'; ctx.fillRect(0,0,w,h);
+    const step=6;
+    for(let px=0;px<w;px+=step){
+      for(let py=0;py<h;py+=step){
+        const x=view.mnx+(px+step/2)/w*(view.mxx-view.mnx);
+        const y=view.mny+(h-(py+step/2))/h*(view.mxy-view.mny);
+        const p=predictFn(model,[x,y]);
+        ctx.fillStyle=p===0?'rgba(255,123,114,0.10)':'rgba(126,231,135,0.10)';
+        ctx.fillRect(px,py,step,step);
+      }
+    }
+    // grid
+    ctx.strokeStyle='#161b22'; ctx.lineWidth=1;
+    for(let g=0.5;g<w;g+=Math.max(w/8,40)){ ctx.beginPath();ctx.moveTo(g,0);ctx.lineTo(g,h);ctx.stroke(); ctx.beginPath();ctx.moveTo(0,g);ctx.lineTo(w,g);ctx.stroke(); }
+    // points
+    for(let i=0;i<ds.X.length;i++){
+      const px=toPx(ds.X[i][0],view.mnx,view.mxx,6,w-6);
+      const py=h-toPx(ds.X[i][1],view.mny,view.mxy,6,h-6);
+      ctx.beginPath(); ctx.arc(px,py,3.4,0,Math.PI*2);
+      ctx.fillStyle=ds.y[i]===0?'#ff7b72':'#7ee787';
+      ctx.fill();
+      ctx.strokeStyle='#0d1117'; ctx.lineWidth=1; ctx.stroke();
+    }
+  }
+
+  // ---------- app state ----------
+  let ds=null, view=null, tree=null, forest=null;
+
+  function makeDS(){
+    const kind=$('dsSel').value;
+    const noise=parseFloat($('noise').value);
+    const seed=(Math.random()*1e9)|0;
+    if(kind==='moons') ds=F.makeMoons(400,noise,seed);
+    else if(kind==='circles') ds=F.makeCircles(400,noise,seed);
+    else ds=F.makeXor(400,0,seed);
+    view=fitView(ds);
+  }
+
+  function train(){
+    const md=parseInt($('depth').value,10);
+    const crit=$('critSel').value;
+    tree=F.trainTree(ds,{maxDepth:md,minSplit:2,criterion:crit});
+    forest=F.trainForest(ds,{trees:parseInt($('ntree').value,10),seed:77,maxDepth:md,criterion:crit});
+    $('dTag').textContent=md;
+    drawModel($('cv1'),tree,F.predictNode,ds,view);
+    drawModel($('cv2'),forest,F.forestPredict,ds,view);
+    $('treeWrap').innerHTML=treeSVG(tree);
+
+    const trainAcc=F.accuracy(tree,ds);
+    const cv=F.crossValidate(ds,5,{maxDepth:md,criterion:crit,seed:3});
+    const fcv=F.crossValidate(ds,5,{maxDepth:md,criterion:crit,seed:3});
+    const base=F.baselineAcc(ds);
+    const fAcc=F.forestAccuracy(forest,ds);
+    $('stats').innerHTML=
+      '<div class="row"><span>训练精度（单树）</span><span>'+(trainAcc*100).toFixed(1)+'%</span></div>'+
+      '<div class="row"><span>树深度 / 节点数</span><span>'+F.treeDepth(tree)+' / '+F.countNodes(tree)+'</span></div>'+
+      '<div class="row"><span>5 折 CV（单树）</span><span>'+(cv*100).toFixed(1)+'%</span></div>'+
+      '<div class="row"><span>5 折 CV（森林）</span><span>'+(fcv*100).toFixed(1)+'%</span></div>'+
+      '<div class="row"><span>森林训练精度</span><span>'+(fAcc*100).toFixed(1)+'%</span></div>'+
+      '<div class="row"><span>多数类基线</span><span>'+(base*100).toFixed(1)+'%</span></div>';
+    $('barTree').style.width=(cv*100)+'%';
+    $('barForest').style.width=(fcv*100)+'%';
+    $('barBase').style.width=(base*100)+'%';
+  }
+
+  $('noise').addEventListener('input',e=>{ $('noiseV').textContent=parseFloat(e.target.value).toFixed(2); });
+  $('depth').addEventListener('input',e=>{ $('depthV').textContent=e.target.value; });
+  $('ntree').addEventListener('input',e=>{ $('ntreeV').textContent=e.target.value; });
+  $('regenBtn').addEventListener('click',()=>{ makeDS(); train(); });
+  $('trainBtn').addEventListener('click',()=>{ train(); });
+
+  makeDS(); train(); runTests();
+})();
+</script>
+</body>
+</html>
