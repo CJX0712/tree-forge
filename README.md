@@ -1,5 +1,12 @@
 # TreeForge ⚒ 决策树锻造炉
 
+<p align="center">
+  <a href="https://github.com/CJX0712/tree-forge/actions/workflows/ci.yml"><img src="https://github.com/CJX0712/tree-forge/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/CJX0712/tree-forge/releases"><img src="https://img.shields.io/github/v/release/CJX0712/tree-forge?sort=semver" alt="release"></a>
+  <a href="https://github.com/CJX0712/tree-forge/blob/main/LICENSE"><img src="https://img.shields.io/github/license/CJX0712/tree-forge" alt="license"></a>
+  <img src="https://img.shields.io/badge/author-%E6%99%A8%E6%98%9F-1f6feb" alt="author">
+</p>
+
 单文件 HTML（内联 CSS/JS，零外部依赖）的**手写决策树 + 随机森林**可视化实验场。
 纯 JavaScript 实现 CART / ID3 风格的轴对齐分裂树，无任何 ML 库。
 
